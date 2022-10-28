@@ -1,4 +1,13 @@
+// Vehicle Controller
+// Author: Douglas Krahmer
+// Created: 2022-10-27
+
+#define INCLUDE_RF // comment this line if not using RF input for garage sensing
+
+#include <arduino-timer.h>
+#ifdef INCLUDE_RF
 #include <VirtualWire.h>
+#endif
 
 // Settings
 const unsigned long RETURNING_HOME_ALLOW_DELAY_MILLIS = 20 * 1000;
@@ -9,9 +18,14 @@ const int MISSING_SIGNAL_MILLIS = 5 * 1000;
 const int MIRROR_TRAVEL_FOLD_MILLIS = 3500;
 const int MIRROR_TRAVEL_UNFOLD_MILLIS = 3500;
 const int MIRROR_REST_MILLIS = 500; // time to wait before reversing direction
+
+#ifdef INCLUDE_RF
 const int RF_BPS = 4800;
-const char* VEHICLE_NOT_IN_GARAGE_MESSAGE = "Outside";
-const char* VEHICLE_IN_GARAGE_MESSAGE = "In Garage";
+#else
+const int VW_MAX_MESSAGE_LEN = 10;
+#endif
+const char* VEHICLE_OUTSIDE_GARAGE_MESSAGE = "Outside";
+const char* VEHICLE_INSIDE_GARAGE_MESSAGE = "In Garage";
 
 // Pin assignment
 const int PIN_MIRROR_OVERRIDE_FOLD_IN = 2;
@@ -30,12 +44,22 @@ const int PIN_DASH_CAM_POWER = A1;
 
 const int PIN_VEHICLE_ON_SENSOR = A0;
 
+#ifndef INCLUDE_RF
+const int PIN_VEHICLE_INSIDE_GARAGE_SENSOR = 11;
+const int PIN_VEHICLE_OUTSIDE_GARAGE_SENSOR = 12;
+#endif
+
 // Global
+Timer<> _timer = timer_create_default();
+
 bool _isDashCamOn = false;
 bool _isDashCamTimedOut = false;
-bool _isMirrorPowerOn = false;
-bool _isMirrorOverrideIn = false;
-bool _isMirrorOverrideOut = false;
+bool _isMirrorAFoldPowerOn = false;
+bool _isMirrorBFoldPowerOn = false;
+bool _isMirrorOverrideFoldIn = false;
+bool _isMirrorOverrideFoldOut = false;
+bool _isMirrorAFoldResting = false;
+bool _isMirrorBFoldResting = false;
 bool _isVehicleOn = false;
 bool _isVehicleInGarage = false;
 bool _isSignalTimedOut = false;
@@ -43,15 +67,19 @@ bool _isReturningHome = false;
 bool _isOffWhileVehicleInGarage = false;
 bool _isStartupMode = true;
 bool _isFirstFullRun = false;
-int _mirrorPosition = 0;
+int _mirrorAFoldPosition = 0;
+int _mirrorBFoldPosition = 0;
 unsigned long _lastVehicleOnMillis = 0;
 unsigned long _lastVehicleOffMillis = 0;
 unsigned long _lastDashCamOnMillis = 0;
 unsigned long _lastDashCamOnBatteryMillis = 0;
 unsigned long _lastMessageReceivedMillis = 0;
 unsigned long _lastVehicleInGarageMillis = 0;
-unsigned long _lastMirrorPositionSetMillis = 0;
+unsigned long _lastMirrorAFoldPositionSetMillis = 0;
+unsigned long _lastMirrorBFoldPositionSetMillis = 0;
+#ifdef INCLUDE_RF
 uint8_t _buffer[VW_MAX_MESSAGE_LEN + 1]; // +1 for the termination char
+#endif
 
 void setup()
 {
@@ -79,12 +107,17 @@ void setup()
   digitalWrite(PIN_MIRROR_B_FOLD_IN, LOW);
   digitalWrite(PIN_MIRROR_B_FOLD_OUT, LOW);
 
+#ifdef INCLUDE_RF
   Serial.println("Starting RF receiver");
   
   // Initialize RF transmitter
   vw_set_rx_pin(PIN_RF_RX);
   vw_setup(RF_BPS);
   vw_rx_start();            // Start the receiver PLL running
+#else
+  pinMode(PIN_VEHICLE_INSIDE_GARAGE_SENSOR, INPUT_PULLUP);
+  pinMode(PIN_VEHICLE_OUTSIDE_GARAGE_SENSOR, INPUT_PULLUP);
+#endif
 
   Serial.print("Starting input-only sequence for ");
   Serial.print(STARTUP_MODE_DELAY_MILLIS);
@@ -93,6 +126,8 @@ void setup()
 
 void loop()
 {
+  _timer.tick<void>();
+  
   HandleInputs();
   if (_isStartupMode)
   {
@@ -112,7 +147,7 @@ void loop()
 
 void HandleInputs()
 {
-  HandleRfReceive();
+  HandleGarageInput();
 
   bool isVehicleOn = digitalRead(PIN_VEHICLE_ON_SENSOR) == HIGH;
   if (isVehicleOn != _isVehicleOn || _isFirstFullRun)
@@ -146,28 +181,42 @@ void HandleInputs()
   }
     
   bool isMirrorOverrideIn = digitalRead(PIN_MIRROR_OVERRIDE_FOLD_IN) == LOW;
-  if (isMirrorOverrideIn != _isMirrorOverrideIn)
+  if (isMirrorOverrideIn != _isMirrorOverrideFoldIn)
   {
     Serial.print("Mirror fold in override ");
     Serial.println(isMirrorOverrideIn ? "enabled" : "disabled");
-    _isMirrorOverrideIn = isMirrorOverrideIn;
+    _isMirrorOverrideFoldIn = isMirrorOverrideIn;
   }
 
   bool isMirrorOverrideOut = digitalRead(PIN_MIRROR_OVERRIDE_FOLD_OUT) == LOW;
-  if (isMirrorOverrideOut != _isMirrorOverrideOut)
+  if (isMirrorOverrideOut != _isMirrorOverrideFoldOut)
   {
     Serial.print("Mirror fold out override ");
     Serial.println(isMirrorOverrideOut ? "enabled" : "disabled");
-    _isMirrorOverrideOut = isMirrorOverrideOut;
+    _isMirrorOverrideFoldOut = isMirrorOverrideOut;
   }
 }
 
-void HandleRfReceive()
+void HandleGarageInput()
 {
   uint8_t buflen = VW_MAX_MESSAGE_LEN;
 
   bool messageReceived = false;
+#ifdef INCLUDE_RF
   if (vw_get_message(_buffer, &buflen)) // Non-blocking
+#else
+  bool isVehicleOutsideGarage = digitalRead(PIN_VEHICLE_OUTSIDE_GARAGE_SENSOR) == LOW;
+  bool isVehicleInsideGarage = digitalRead(PIN_VEHICLE_INSIDE_GARAGE_SENSOR) == LOW;
+  char* _buffer;
+  if (isVehicleInsideGarage)
+    _buffer = VEHICLE_INSIDE_GARAGE_MESSAGE;
+  else if (isVehicleOutsideGarage)
+    _buffer = VEHICLE_OUTSIDE_GARAGE_MESSAGE;
+  else
+    _buffer = "";
+  buflen = strlen(_buffer);
+  if (buflen > 0)
+#endif
   {
     _buffer[buflen] = 0; // VirtualWire does not self terminate
     Serial.print("Received ");
@@ -175,12 +224,12 @@ void HandleRfReceive()
     Serial.print(" chars: [");
     Serial.print((char*) _buffer);
     Serial.println("]");
-    if (strcmp(_buffer, VEHICLE_NOT_IN_GARAGE_MESSAGE) == 0)
+    if (strcmp(_buffer, VEHICLE_OUTSIDE_GARAGE_MESSAGE) == 0)
     {
       messageReceived = true;
       _isVehicleInGarage = false;
     }
-    else if (strcmp(_buffer, VEHICLE_IN_GARAGE_MESSAGE) == 0)
+    else if (strcmp(_buffer, VEHICLE_INSIDE_GARAGE_MESSAGE) == 0)
     {
       messageReceived = true;
       _isVehicleInGarage = true;
@@ -240,55 +289,141 @@ void SetIsReturningHome(bool isReturningHome)
 
 void HandleMirrorPositions()
 {
-  bool mirrorsOut;
-  if (_isMirrorOverrideOut)
+  bool mirrorAFoldOut;
+  bool mirrorBFoldOut;
+  if (_isMirrorOverrideFoldOut)
   {
-    mirrorsOut = true;
+    mirrorAFoldOut = true;
+    mirrorBFoldOut = true;
   }
-  else if (_isMirrorOverrideIn)
+  else if (_isMirrorOverrideFoldIn)
   {
-    mirrorsOut = false;
+    mirrorAFoldOut = false;
+    mirrorBFoldOut = false;
   }
   else
   { // automatic mode
-    mirrorsOut = !(_isVehicleInGarage || _isReturningHome);
-    if (!_isVehicleOn)
-      mirrorsOut = false;
+    if (!_isVehicleOn) 
+    {
+      mirrorAFoldOut = false;
+      mirrorBFoldOut = false;
+    }
+    else
+    {
+      mirrorAFoldOut = !(_isVehicleInGarage || _isReturningHome);
+      mirrorBFoldOut = true;
+    }
   }
   
-  SetMirrorPositions(mirrorsOut);
+  SetMirrorFoldPosition('A', mirrorAFoldOut);
+  SetMirrorFoldPosition('B', mirrorBFoldOut);
 }
 
-void SetMirrorPositions(bool mirrorsOut)
+void SetMirrorFoldPosition(char mirrorId, bool mirrorOut)
 {
-  if (_isMirrorPowerOn)
+  bool* __isMirrorFoldPowerOn;
+  unsigned long* __lastMirrorFoldPositionSetMillis;
+  int* __mirrorFoldPosition = &_mirrorAFoldPosition;
+  bool* __isMirrorFoldResting;
+
+  if (mirrorId == 'A')
   {
-    long mirrorOnTime = millis() - _lastMirrorPositionSetMillis;
-    if ((_mirrorPosition > 0 && mirrorOnTime >= MIRROR_TRAVEL_UNFOLD_MILLIS)
-        || (_mirrorPosition < 0 && mirrorOnTime >= MIRROR_TRAVEL_FOLD_MILLIS))
-      SetMirrorHBridge(0, "travel complete");
+    __isMirrorFoldPowerOn = &_isMirrorAFoldPowerOn;
+    __lastMirrorFoldPositionSetMillis = &_lastMirrorAFoldPositionSetMillis;
+    __mirrorFoldPosition = &_mirrorAFoldPosition;
+    __isMirrorFoldResting = &_isMirrorAFoldResting;
+  }
+  else if (mirrorId == 'B')
+  {
+    __isMirrorFoldPowerOn = &_isMirrorBFoldPowerOn;
+    __lastMirrorFoldPositionSetMillis = &_lastMirrorBFoldPositionSetMillis;
+    __mirrorFoldPosition = &_mirrorBFoldPosition;
+    __isMirrorFoldResting = &_isMirrorBFoldResting;
+  }
+
+  if (*__isMirrorFoldResting)
+    return; // no action while resting
+
+  if (*__isMirrorFoldPowerOn)
+  {
+    long mirrorOnTime = millis() - *__lastMirrorFoldPositionSetMillis;
+    if ((*__mirrorFoldPosition > 0 && mirrorOnTime >= MIRROR_TRAVEL_UNFOLD_MILLIS)
+        || (*__mirrorFoldPosition < 0 && mirrorOnTime >= MIRROR_TRAVEL_FOLD_MILLIS))
+      {
+        SetMirrorHBridge(mirrorId, 0, "travel complete");
+        RestMirrorFold(__isMirrorFoldResting);
+      }
   }
   
-  if (_mirrorPosition == (mirrorsOut ? 1 : -1))
-    return; // the mirrors are already in the requested position
+  if (*__mirrorFoldPosition == (mirrorOut ? 1 : -1))
+    return; // the mirror is already in the requested position
 
-  if (_isMirrorPowerOn)
-    SetMirrorHBridge(0, "wait before reversing");
-
-  SetMirrorHBridge(mirrorsOut ? 1 : -1, "new position");
-}
-
-void SetMirrorHBridge(int mirrorPosition, char* reason)
-{
-  if (mirrorPosition == 0)
+  if (*__isMirrorFoldPowerOn)
   {
-    Serial.print("Turning off mirror folding power");    
+    // If the power was already on then we need to turn off the power and wait to ensure the motor fully stops
+    SetMirrorHBridge(mirrorId, 0, "stop and wait before reversing direction");
+    RestMirrorFold(__isMirrorFoldResting);
   }
   else
   {
-    Serial.print("Folding mirrors ");
-    Serial.print(mirrorPosition > 0 ? "out" : "in");
+    SetMirrorHBridge(mirrorId, mirrorOut ? 1 : -1, "new position");
   }
+}
+
+void RestMirrorFold(bool* isMirrorFoldResting)
+{
+  *isMirrorFoldResting = true;
+  _timer.in(MIRROR_REST_MILLIS, [](bool* isMirrorFoldResting) 
+  {
+    *isMirrorFoldResting = false; 
+  }, isMirrorFoldResting);
+}
+
+void SetMirrorHBridge(char mirrorId, int mirrorFoldPosition, char* reason)
+{
+  bool* __isMirrorFoldPowerOn;
+  int pinMirrorFoldIn;
+  int pinMirrorFoldOut;
+  int pinMirrorFoldPower;
+  unsigned long* __lastMirrorFoldPositionSetMillis;
+  int* __mirrorFoldPosition;
+  
+  if (mirrorId == 'A')
+  {
+    __isMirrorFoldPowerOn = &_isMirrorAFoldPowerOn;
+    pinMirrorFoldIn = PIN_MIRROR_A_FOLD_IN;
+    pinMirrorFoldOut = PIN_MIRROR_A_FOLD_OUT;
+    pinMirrorFoldPower = PIN_MIRROR_A_POWER;
+    __lastMirrorFoldPositionSetMillis = &_lastMirrorAFoldPositionSetMillis;
+    __mirrorFoldPosition = &_mirrorAFoldPosition;
+  }
+  else if (mirrorId == 'B')
+  {
+    __isMirrorFoldPowerOn = &_isMirrorBFoldPowerOn;
+    pinMirrorFoldIn = PIN_MIRROR_B_FOLD_IN;
+    pinMirrorFoldOut = PIN_MIRROR_B_FOLD_OUT;
+    pinMirrorFoldPower = PIN_MIRROR_B_POWER;
+    __lastMirrorFoldPositionSetMillis = &_lastMirrorBFoldPositionSetMillis;
+    __mirrorFoldPosition = &_mirrorBFoldPosition;
+  }
+  else
+  {
+    return; // invalid mirrorId
+  }
+
+  if (mirrorFoldPosition == 0)
+  {
+    Serial.print("Turning off mirror ");    
+    Serial.print(mirrorId);    
+    Serial.print(" folding power");    
+  }
+  else
+  {
+    Serial.print("Folding mirror ");
+    Serial.print(mirrorId);    
+    Serial.print(mirrorFoldPosition > 0 ? " out" : " in");
+  }
+
   if (reason)
   {
     Serial.print(" (");
@@ -297,25 +432,16 @@ void SetMirrorHBridge(int mirrorPosition, char* reason)
   }
   Serial.println();
   
-  // turn off the mirror power (H-Bridge controller)
-  digitalWrite(PIN_MIRROR_A_FOLD_IN, mirrorPosition == 0 ? LOW : (mirrorPosition > 0 ? LOW : HIGH));
-  digitalWrite(PIN_MIRROR_A_FOLD_OUT, mirrorPosition == 0 ? LOW : (mirrorPosition > 0 ? HIGH : LOW));
-  digitalWrite(PIN_MIRROR_B_FOLD_IN, mirrorPosition == 0 ? LOW : (mirrorPosition > 0 ? LOW : HIGH));
-  digitalWrite(PIN_MIRROR_B_FOLD_OUT, mirrorPosition == 0 ? LOW : (mirrorPosition > 0 ? HIGH : LOW));
-  digitalWrite(PIN_MIRROR_A_POWER, mirrorPosition == 0 ? LOW : HIGH);
-  digitalWrite(PIN_MIRROR_B_POWER, mirrorPosition == 0 ? LOW : HIGH);
+  digitalWrite(pinMirrorFoldIn, mirrorFoldPosition == 0 ? LOW : (mirrorFoldPosition > 0 ? LOW : HIGH));
+  digitalWrite(pinMirrorFoldOut, mirrorFoldPosition == 0 ? LOW : (mirrorFoldPosition > 0 ? HIGH : LOW));
+  digitalWrite(pinMirrorFoldPower, mirrorFoldPosition == 0 ? LOW : HIGH);
+  *__isMirrorFoldPowerOn = mirrorFoldPosition != 0;
   
-  _isMirrorPowerOn = mirrorPosition != 0;
-  
-  if (mirrorPosition == 0)
-  {
-    delay(MIRROR_REST_MILLIS);
-  }
-  else
-  {
-    _mirrorPosition = mirrorPosition;
-    _lastMirrorPositionSetMillis = millis();
-  }
+  if (mirrorFoldPosition == 0)
+    return; // position 0 is only to turn off the motor. No need to update the position value.
+
+  *__mirrorFoldPosition = mirrorFoldPosition;
+  *__lastMirrorFoldPositionSetMillis = millis();
 }
 
 void HandleDashCamPower()
