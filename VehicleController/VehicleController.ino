@@ -10,22 +10,25 @@
 #endif
 
 // Settings
-const unsigned long RETURNING_HOME_ALLOW_DELAY_MILLIS = 20 * 1000;
+const unsigned long RETURNING_HOME_ALLOW_DELAY_MILLIS = 5 * 60 * 1000;
 const unsigned long DASH_CAM_MAX_ON_BATTERY_MILLIS = 2 * 24 * 60 * 60 * 1000;
 const unsigned long DASH_CAM_MIN_ON_MILLIS = 10 * 1000;
-const int STARTUP_MODE_DELAY_MILLIS = 1000;
-const int MISSING_SIGNAL_MILLIS = 5 * 1000;
-const int MIRROR_TRAVEL_FOLD_MILLIS = 3500;
-const int MIRROR_TRAVEL_UNFOLD_MILLIS = 3500;
-const int MIRROR_REST_MILLIS = 500; // time to wait before reversing direction
+const unsigned long STARTUP_MODE_DELAY_MILLIS = 1000;
+const unsigned long MISSING_SIGNAL_MILLIS = 2 * 60 * 1000;
+const unsigned long MIRROR_TRAVEL_FOLD_MILLIS = 3500;
+const unsigned long MIRROR_TRAVEL_UNFOLD_MILLIS = 3500;
+const unsigned long MIRROR_REST_MILLIS = 500; // time to wait before reversing direction
 
 #ifdef INCLUDE_RF
 const int RF_BPS = 4800;
 #else
-const int VW_MAX_MESSAGE_LEN = 10;
+const int VW_MAX_MESSAGE_LEN = 20;
 #endif
-const char* VEHICLE_OUTSIDE_GARAGE_MESSAGE = "Outside";
-const char* VEHICLE_INSIDE_GARAGE_MESSAGE = "In Garage";
+const char* VEHICLE_DETECTED_MESSAGE = "Detected";
+const char* VEHICLE_NOT_DETECTED_MESSAGE = "Undetected";
+const char* GARAGE_DOOR_OPEN_MESSAGE = "Open";
+const char* GARAGE_DOOR_CLOSED_MESSAGE = "Closed";
+const char MESSAGE_SEPARATOR_CHAR = '-';
 
 // Pin assignment
 const int PIN_MIRROR_OVERRIDE_FOLD_IN = 2;
@@ -38,15 +41,16 @@ const int PIN_MIRROR_B_FOLD_OUT = 7;
 const int PIN_MIRROR_B_FOLD_IN = 8;
 const int PIN_MIRROR_B_POWER = 9;
 
-const int PIN_RF_RX = 10; // RF receive signal pin
-
 const int PIN_DASH_CAM_POWER = A1;
 
 const int PIN_VEHICLE_ON_SENSOR = A0;
 
-#ifndef INCLUDE_RF
-const int PIN_VEHICLE_INSIDE_GARAGE_SENSOR = 11;
-const int PIN_VEHICLE_OUTSIDE_GARAGE_SENSOR = 12;
+#ifdef INCLUDE_RF
+const int PIN_RF_RX = 10; // RF receive signal pin
+#else
+const int PIN_VEHICLE_DETECTED_SENSOR = 11;
+const int PIN_VEHICLE_NOT_DETECTED_SENSOR = 12;
+const int PIN_GARAGE_DOOR_OPEN_SENSOR = A5;
 #endif
 
 // Global
@@ -61,10 +65,11 @@ bool _isMirrorOverrideFoldOut = false;
 bool _isMirrorAFoldResting = false;
 bool _isMirrorBFoldResting = false;
 bool _isVehicleOn = false;
-bool _isVehicleInGarage = false;
+bool _isVehicleDetected = false;
 bool _isSignalTimedOut = false;
 bool _isReturningHome = false;
-bool _isOffWhileVehicleInGarage = false;
+bool _isOffWhileVehicleDetected = false;
+bool _isGarageDoorOpen = false;
 bool _isStartupMode = true;
 bool _isFirstFullRun = false;
 int _mirrorAFoldPosition = 0;
@@ -74,7 +79,7 @@ unsigned long _lastVehicleOffMillis = 0;
 unsigned long _lastDashCamOnMillis = 0;
 unsigned long _lastDashCamOnBatteryMillis = 0;
 unsigned long _lastMessageReceivedMillis = 0;
-unsigned long _lastVehicleInGarageMillis = 0;
+unsigned long _lastVehicleDetectedMillis = 0;
 unsigned long _lastMirrorAFoldPositionSetMillis = 0;
 unsigned long _lastMirrorBFoldPositionSetMillis = 0;
 #ifdef INCLUDE_RF
@@ -115,8 +120,9 @@ void setup()
   vw_setup(RF_BPS);
   vw_rx_start();            // Start the receiver PLL running
 #else
-  pinMode(PIN_VEHICLE_INSIDE_GARAGE_SENSOR, INPUT_PULLUP);
-  pinMode(PIN_VEHICLE_OUTSIDE_GARAGE_SENSOR, INPUT_PULLUP);
+  pinMode(PIN_VEHICLE_DETECTED_SENSOR, INPUT_PULLUP);
+  pinMode(PIN_VEHICLE_NOT_DETECTED_SENSOR, INPUT_PULLUP);
+  pinMode(PIN_GARAGE_DOOR_OPEN_SENSOR, INPUT_PULLUP);
 #endif
 
   Serial.print("Starting input-only sequence for ");
@@ -147,7 +153,7 @@ void loop()
 
 void HandleInputs()
 {
-  HandleGarageInput();
+  HandleRfInput();
 
   bool isVehicleOn = digitalRead(PIN_VEHICLE_ON_SENSOR) == HIGH;
   if (isVehicleOn != _isVehicleOn || _isFirstFullRun)
@@ -166,14 +172,14 @@ void HandleInputs()
         _lastDashCamOnBatteryMillis = millis();
     }
     _isVehicleOn = isVehicleOn;
-    bool isOffWhileVehicleInGarage = !isVehicleOn && _isVehicleInGarage;
+    bool isOffWhileVehicleDetected = !isVehicleOn && _isVehicleDetected;
 
-    if (isOffWhileVehicleInGarage != _isOffWhileVehicleInGarage)
+    if (isOffWhileVehicleDetected != _isOffWhileVehicleDetected)
     {
       // only applies when the vehicle turns off while already in the garage
       // there is no affect if the vehicle detects in garage after already off
       Serial.print(" while in garage");
-      _isOffWhileVehicleInGarage = isOffWhileVehicleInGarage;
+      _isOffWhileVehicleDetected = isOffWhileVehicleDetected;
     }
     Serial.println();
       
@@ -197,50 +203,107 @@ void HandleInputs()
   }
 }
 
-void HandleGarageInput()
+void HandleRfInput()
 {
   uint8_t buflen = VW_MAX_MESSAGE_LEN;
 
   bool messageReceived = false;
+  int messagesReceived = 0;
 #ifdef INCLUDE_RF
   if (vw_get_message(_buffer, &buflen)) // Non-blocking
 #else
-  bool isVehicleOutsideGarage = digitalRead(PIN_VEHICLE_OUTSIDE_GARAGE_SENSOR) == LOW;
-  bool isVehicleInsideGarage = digitalRead(PIN_VEHICLE_INSIDE_GARAGE_SENSOR) == LOW;
-  char* _buffer;
-  if (isVehicleInsideGarage)
-    _buffer = VEHICLE_INSIDE_GARAGE_MESSAGE;
-  else if (isVehicleOutsideGarage)
-    _buffer = VEHICLE_OUTSIDE_GARAGE_MESSAGE;
+  bool isVehicleNotDetected = digitalRead(PIN_VEHICLE_NOT_DETECTED_SENSOR) == LOW;
+  bool isVehicleDetected = digitalRead(PIN_VEHICLE_DETECTED_SENSOR) == LOW;
+  bool isGarageDoorOpen = digitalRead(PIN_GARAGE_DOOR_OPEN_SENSOR) == LOW;
+  
+  char _buffer[20];
+  char* msg1;
+  if (isVehicleDetected)
+    msg1 = VEHICLE_DETECTED_MESSAGE;
+  else if (isVehicleNotDetected)
+    msg1 = VEHICLE_NOT_DETECTED_MESSAGE;
   else
-    _buffer = "";
+    msg1 = "";
+
+  if (strlen(msg1) > 0)
+  {
+    sprintf(_buffer, "%s%c%s", 
+      msg1, 
+      MESSAGE_SEPARATOR_CHAR, 
+      isGarageDoorOpen ? GARAGE_DOOR_OPEN_MESSAGE : GARAGE_DOOR_CLOSED_MESSAGE);
+  }
+  else
+  {
+    _buffer[0] = 0;
+  }
+
   buflen = strlen(_buffer);
   if (buflen > 0)
 #endif
   {
-    _buffer[buflen] = 0; // VirtualWire does not self terminate
+    _buffer[buflen] = 0; // VirtualWire does not self terminate strings
     Serial.print("Received ");
     Serial.print(buflen);
     Serial.print(" chars: [");
     Serial.print((char*) _buffer);
     Serial.println("]");
-    if (strcmp(_buffer, VEHICLE_OUTSIDE_GARAGE_MESSAGE) == 0)
+    if (buflen > 3)
     {
-      messageReceived = true;
-      _isVehicleInGarage = false;
-    }
-    else if (strcmp(_buffer, VEHICLE_INSIDE_GARAGE_MESSAGE) == 0)
-    {
-      messageReceived = true;
-      _isVehicleInGarage = true;
-      _lastVehicleInGarageMillis = millis();
-      SetIsReturningHome(false);
+      unsigned long lastVehicleDetectedMillis = _lastVehicleDetectedMillis;
+      bool isVehicleDetected = _isVehicleDetected;
+      if (strstr(_buffer, VEHICLE_NOT_DETECTED_MESSAGE))
+      {
+        messagesReceived++;
+        isVehicleDetected = false;
+      }
+      else if (strstr(_buffer, VEHICLE_DETECTED_MESSAGE))
+      {
+        messagesReceived++;
+        isVehicleDetected = true;
+        lastVehicleDetectedMillis = millis();
+        SetIsReturningHome(false);
+      }
+
+      bool isGarageDoorOpen = true;
+      if (strstr(_buffer, GARAGE_DOOR_OPEN_MESSAGE))
+      {
+        messagesReceived++;
+        isGarageDoorOpen = true;
+      }
+      else if (strstr(_buffer, GARAGE_DOOR_CLOSED_MESSAGE))
+      {
+        messagesReceived++;
+        isGarageDoorOpen = false;
+      }
+
+      messageReceived = messagesReceived == 2;
+      if (messageReceived)
+      {
+        if (_isVehicleDetected != isVehicleDetected)
+        {
+          _isVehicleDetected = isVehicleDetected;
+          _lastVehicleDetectedMillis = lastVehicleDetectedMillis;
+
+          Serial.print("Vehicle is ");
+          Serial.print(_isVehicleDetected ? "" : "not ");
+          Serial.println("detected.");
+        }
+
+        if (_isGarageDoorOpen != isGarageDoorOpen)
+        {
+          _isGarageDoorOpen = isGarageDoorOpen;
+
+          Serial.print("Garage door is ");
+          Serial.print(_isGarageDoorOpen ? "open" : "closed");
+          Serial.println(".");
+        }
+      }
     }
   }
 
   if (messageReceived)
   {
-    if (!_isReturningHome && _isSignalTimedOut && _isVehicleOn)
+    if (!_isReturningHome && _isVehicleOn && _isSignalTimedOut)
     {
       if (millis() - _lastVehicleOnMillis >= RETURNING_HOME_ALLOW_DELAY_MILLIS 
         && millis() - _lastMessageReceivedMillis >= RETURNING_HOME_ALLOW_DELAY_MILLIS)
@@ -262,17 +325,17 @@ void HandleGarageInput()
   
   if (!_isSignalTimedOut && millis() - _lastMessageReceivedMillis >= MISSING_SIGNAL_MILLIS)
   {
-    Serial.print("Garage signal not seen for ");
+    Serial.print("Signal not seen for ");
     Serial.print(MISSING_SIGNAL_MILLIS);
     Serial.println(" millis.");
     _isSignalTimedOut = true;
 
     SetIsReturningHome(false);
 
-    if (_isVehicleInGarage)
+    if (_isVehicleDetected)
     {
       Serial.println("Assuming not in garage.");
-      _isVehicleInGarage = false;
+      _isVehicleDetected = false;
     }
   }
 }
@@ -303,15 +366,15 @@ void HandleMirrorPositions()
   }
   else
   { // automatic mode
-    if (!_isVehicleOn) 
+    if (_isVehicleOn) 
     {
-      mirrorAFoldOut = false;
-      mirrorBFoldOut = false;
+      mirrorAFoldOut = !(_isVehicleDetected || (_isReturningHome && _isGarageDoorOpen));
+      mirrorBFoldOut = true;
     }
     else
     {
-      mirrorAFoldOut = !(_isVehicleInGarage || _isReturningHome);
-      mirrorBFoldOut = true;
+      mirrorAFoldOut = false;
+      mirrorBFoldOut = false;
     }
   }
   
@@ -446,7 +509,7 @@ void SetMirrorHBridge(char mirrorId, int mirrorFoldPosition, char* reason)
 
 void HandleDashCamPower()
 {
-  bool dashCamOn = (_isVehicleOn || !_isVehicleInGarage) && !_isOffWhileVehicleInGarage;
+  bool dashCamOn = (_isVehicleOn || !_isVehicleDetected) && !_isOffWhileVehicleDetected;
   
   if (dashCamOn && _isDashCamTimedOut && _isVehicleOn)
   {
