@@ -10,14 +10,14 @@
 #endif
 
 // Settings
-const unsigned long RETURNING_HOME_ALLOW_DELAY_MILLIS = 5 * 60 * 1000;
-const unsigned long DASH_CAM_MAX_ON_BATTERY_MILLIS = 2 * 24 * 60 * 60 * 1000;
-const unsigned long DASH_CAM_MIN_ON_MILLIS = 10 * 1000;
-const unsigned long STARTUP_MODE_DELAY_MILLIS = 1000;
-const unsigned long MISSING_SIGNAL_MILLIS = 2 * 60 * 1000;
-const unsigned long MIRROR_TRAVEL_FOLD_MILLIS = 3500;
-const unsigned long MIRROR_TRAVEL_UNFOLD_MILLIS = 3500;
-const unsigned long MIRROR_REST_MILLIS = 500; // time to wait before reversing direction
+const unsigned long RETURNING_HOME_ALLOW_DELAY_MILLIS = 5 * 60 * 1000UL;
+const unsigned long DASH_CAM_MAX_ON_BATTERY_MILLIS = 2 * 24 * 60 * 60 * 1000UL;
+const unsigned long DASH_CAM_MIN_ON_MILLIS = 10 * 1000UL;
+const unsigned long STARTUP_MODE_DELAY_MILLIS = 1000UL;
+const unsigned long MISSING_SIGNAL_MILLIS = 1 * 60 * 1000UL;
+const unsigned long MIRROR_TRAVEL_FOLD_MILLIS = 3500UL;
+const unsigned long MIRROR_TRAVEL_UNFOLD_MILLIS = 3500UL;
+const unsigned long MIRROR_REST_MILLIS = 500UL; // time to wait before reversing direction
 
 #ifdef INCLUDE_RF
 const int RF_BPS = 4800;
@@ -74,14 +74,14 @@ bool _isStartupMode = true;
 bool _isFirstFullRun = false;
 int _mirrorAFoldPosition = 0;
 int _mirrorBFoldPosition = 0;
-unsigned long _lastVehicleOnMillis = 0;
-unsigned long _lastVehicleOffMillis = 0;
-unsigned long _lastDashCamOnMillis = 0;
-unsigned long _lastDashCamOnBatteryMillis = 0;
-unsigned long _lastMessageReceivedMillis = 0;
-unsigned long _lastVehicleDetectedMillis = 0;
-unsigned long _lastMirrorAFoldPositionSetMillis = 0;
-unsigned long _lastMirrorBFoldPositionSetMillis = 0;
+unsigned long _lastVehicleOnMillis = 0UL;
+unsigned long _lastVehicleOffMillis = 0UL;
+unsigned long _lastDashCamOnMillis = 0UL;
+unsigned long _lastDashCamOnBatteryMillis = 0UL;
+unsigned long _lastMessageReceivedMillis = 0UL;
+unsigned long _lastVehicleDetectedMillis = 0UL;
+unsigned long _lastMirrorAFoldPositionSetMillis = 0UL;
+unsigned long _lastMirrorBFoldPositionSetMillis = 0UL;
 #ifdef INCLUDE_RF
 uint8_t _buffer[VW_MAX_MESSAGE_LEN + 1]; // +1 for the termination char
 #endif
@@ -305,7 +305,7 @@ void HandleRfInput()
   {
     if (!_isReturningHome && _isVehicleOn && _isSignalTimedOut)
     {
-      if (millis() - _lastVehicleOnMillis >= RETURNING_HOME_ALLOW_DELAY_MILLIS 
+      if (millis() - _lastVehicleOnMillis >= RETURNING_HOME_ALLOW_DELAY_MILLIS // the "last vehicle on" condition is to handle driveway parking
         && millis() - _lastMessageReceivedMillis >= RETURNING_HOME_ALLOW_DELAY_MILLIS)
       {
         SetIsReturningHome(true);
