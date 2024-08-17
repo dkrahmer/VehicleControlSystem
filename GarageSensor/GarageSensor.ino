@@ -1,9 +1,14 @@
+// Garage Sensor - for use with Vehicle Controller
+// Author: Douglas Krahmer
+// Created: 2022-10-27
+
 #include <VirtualWire.h>
 
 // Settings
-const int DETECT_VEHICLE_DISTANCE_MIN_CM = 0;
-const int DETECT_VEHICLE_DISTANCE_MAX_CM = 100;
-const int DETECT_VEHICLE_DEBOUNCE_MILLIS = 3000;
+const unsigned long DETECT_VEHICLE_DISTANCE_MIN_CM = 0UL;
+const unsigned long DETECT_VEHICLE_DISTANCE_MAX_CM = 100UL;
+const unsigned long DETECT_VEHICLE_DEBOUNCE_MILLIS = 3000UL;
+const unsigned long DETECT_GARAGE_DOOR_DEBOUNCE_MILLIS = 3000UL;
 const int RF_BPS = 4800;
 const char* VEHICLE_DETECTED_MESSAGE = "Detected";
 const char* VEHICLE_NOT_DETECTED_MESSAGE = "Undetected";
@@ -18,22 +23,25 @@ const int PIN_PONG = 6; // Echo Pin of Ultrasonic Sensor
 
 const int PIN_RF_TX = 4; // RF send signal pin
 const int PIN_STATUS_LED = 13; // Built-in to Arduino Pro Mini
+const int PIN_VEHICLE_DETECTED_LED = 9;
+const int PIN_GARAGE_DOOR_OPEN_LED = PIN_STATUS_LED;
 
 // Calculated constants
 // prevent detection from taking a long time when out of range (x5 to wait for ping and echo to complete)
-const unsigned long DISTANCE_ECHO_TIMEOUT = ((unsigned long) DETECT_VEHICLE_DISTANCE_MAX_CM) * 5 * 29 * 2;
+const unsigned long DISTANCE_ECHO_TIMEOUT = DETECT_VEHICLE_DISTANCE_MAX_CM * 5 * 29 * 2;
 
 // Global
 bool _isVehicleDetected = false;
 bool _isGarageDoorOpen = false;
-unsigned long _lastDetectionChangeMillis = 0;
+unsigned long _lastVehicleDetectionChangeMillis = 0UL;
+unsigned long _lastGarageDoorDetectionChangeMillis = 0UL;
 char _buffer[40];
 
 void setup() {
   pinMode(PIN_GARAGE_DOOR_SENSOR, INPUT_PULLUP);
 
-  pinMode(PIN_STATUS_LED, OUTPUT);
-  digitalWrite(PIN_STATUS_LED, LOW);
+  pinMode(PIN_VEHICLE_DETECTED_LED, OUTPUT);
+  digitalWrite(PIN_VEHICLE_DETECTED_LED, LOW);
 
   // Initialize ultrasonic sensor
   pinMode(PIN_PING, OUTPUT);
@@ -48,10 +56,10 @@ void setup() {
 }
 
 void loop() {
-  GetInput();
+  ReadSensors();
 
   //Serial.print("Is vehicle in garage: ");
-  //Serial.println(_isVehicleInGarage ? "Yes" : "No");
+  //Serial.println(_isVehicleDetected ? "Yes" : "No");
   
   //int distanceCm = GetDistance();
   //Serial.print("Distance: ");
@@ -76,23 +84,26 @@ void loop() {
   delay(100);
 }
 
-void GetInput()
+void ReadSensors()
 {
-  _isGarageDoorOpen = digitalRead(PIN_GARAGE_DOOR_SENSOR) == HIGH;
-  bool isVehicleInGarage = IsVehicleInGarage();
+  bool isGarageDoorOpen = digitalRead(PIN_GARAGE_DOOR_SENSOR) == HIGH;
+  bool isVehicleDetected = IsVehicleDetected();
 
-  // Update the status LED immediately. Help with positioning that is not delayed.
-  digitalWrite(PIN_STATUS_LED, isVehicleInGarage ? LOW : HIGH);
+  // Update the status LEDs immediately for in-person sensor debugging.
+  digitalWrite(PIN_GARAGE_DOOR_OPEN_LED, isGarageDoorOpen ? LOW : HIGH);
+  digitalWrite(PIN_VEHICLE_DETECTED_LED, isVehicleDetected ? LOW : HIGH);
 
-  if (_isVehicleDetected == isVehicleInGarage)
-    return;
+  if (isGarageDoorOpen != _isGarageDoorOpen && !(millis() - _lastGarageDoorDetectionChangeMillis < DETECT_GARAGE_DOOR_DEBOUNCE_MILLIS))
+  {
+    _isGarageDoorOpen = isGarageDoorOpen;
+    _lastGarageDoorDetectionChangeMillis = millis();
+  }
 
-  // status changed
-  if (millis() - _lastDetectionChangeMillis < DETECT_VEHICLE_DEBOUNCE_MILLIS)
-    return; // This change is too soon. Try again next time
-
-  _isVehicleDetected = isVehicleInGarage;
-  _lastDetectionChangeMillis = millis();
+  if (isVehicleDetected != _isVehicleDetected && !(millis() - _lastVehicleDetectionChangeMillis < DETECT_VEHICLE_DEBOUNCE_MILLIS))
+  {
+    _isVehicleDetected = isVehicleDetected;
+    _lastVehicleDetectionChangeMillis = millis();
+  }
 }
 
 void TransmitMessage(char* message)
@@ -103,13 +114,13 @@ void TransmitMessage(char* message)
   vw_wait_tx(); // Wait until the whole message is sent
 }
 
-bool IsVehicleInGarage()
+bool IsVehicleDetected()
 {
   long distance_cm = GetDistance();
   return distance_cm != -1 && distance_cm >= DETECT_VEHICLE_DISTANCE_MIN_CM && distance_cm <= DETECT_VEHICLE_DISTANCE_MAX_CM;
 }
 
-int GetDistance()
+long GetDistance()
 {
   digitalWrite(PIN_PING, HIGH);
   delayMicroseconds(10);
