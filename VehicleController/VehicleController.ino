@@ -1,4 +1,4 @@
-// Vehicle Controller
+// Vehicle Controller - use with Garage Sensor (optional)
 // Author: Douglas Krahmer
 // Created: 2022-10-27
 
@@ -18,6 +18,7 @@ const unsigned long MISSING_SIGNAL_MILLIS = 1 * 60 * 1000UL;
 const unsigned long MIRROR_TRAVEL_FOLD_MILLIS = 3500UL;
 const unsigned long MIRROR_TRAVEL_UNFOLD_MILLIS = 3500UL;
 const unsigned long MIRROR_REST_MILLIS = 500UL; // time to wait before reversing direction
+const unsigned long DETECT_VEHICLE_ON_DEBOUNCE_MILLIS = 4000UL; // prevent open then close when starting vehicle
 
 #ifdef INCLUDE_RF
 const int RF_BPS = 4800;
@@ -82,6 +83,7 @@ unsigned long _lastMessageReceivedMillis = 0UL;
 unsigned long _lastVehicleDetectedMillis = 0UL;
 unsigned long _lastMirrorAFoldPositionSetMillis = 0UL;
 unsigned long _lastMirrorBFoldPositionSetMillis = 0UL;
+unsigned long _lastVehicleOnChangeMillis = 0UL;
 #ifdef INCLUDE_RF
 uint8_t _buffer[VW_MAX_MESSAGE_LEN + 1]; // +1 for the termination char
 #endif
@@ -156,7 +158,9 @@ void HandleInputs()
   HandleRfInput();
 
   bool isVehicleOn = digitalRead(PIN_VEHICLE_ON_SENSOR) == HIGH;
-  if (isVehicleOn != _isVehicleOn || _isFirstFullRun)
+
+  if ((isVehicleOn != _isVehicleOn && !(millis() - _lastVehicleOnChangeMillis < DETECT_VEHICLE_ON_DEBOUNCE_MILLIS))
+    || _isFirstFullRun)
   {
     // state changed
     if (isVehicleOn)
@@ -171,16 +175,26 @@ void HandleInputs()
       if (_isDashCamOn)
         _lastDashCamOnBatteryMillis = millis();
     }
+
     _isVehicleOn = isVehicleOn;
-    bool isOffWhileVehicleDetected = !isVehicleOn && _isVehicleDetected;
+    _lastVehicleOnChangeMillis = millis();
+
+    Serial.print(" ");
+    Serial.print(_isVehicleDetected ? "inside" : "outside");
+    Serial.print(" garage");
+
+    bool isOffWhileVehicleDetected = !_isVehicleOn && _isVehicleDetected;
 
     if (isOffWhileVehicleDetected != _isOffWhileVehicleDetected)
     {
       // only applies when the vehicle turns off while already in the garage
       // there is no affect if the vehicle detects in garage after already off
-      Serial.print(" while in garage");
+      Serial.print(" - ");
+      Serial.print(isOffWhileVehicleDetected ? "enable" : "disable");
+      Serial.print(" [is off while vehicle detected mode]");
       _isOffWhileVehicleDetected = isOffWhileVehicleDetected;
     }
+
     Serial.println();
       
     SetIsReturningHome(false);
@@ -510,7 +524,7 @@ void SetMirrorHBridge(char mirrorId, int mirrorFoldPosition, char* reason)
 void HandleDashCamPower()
 {
   bool dashCamOn = _isVehicleOn || (!_isVehicleDetected && !_isOffWhileVehicleDetected);
-  
+
   if (dashCamOn && _isDashCamTimedOut && _isVehicleOn)
   {
     // A dash cam timeout exists but the vehicle is on now so we can reset the timeout
