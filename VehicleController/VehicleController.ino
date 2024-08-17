@@ -509,7 +509,7 @@ void SetMirrorHBridge(char mirrorId, int mirrorFoldPosition, char* reason)
 
 void HandleDashCamPower()
 {
-  bool dashCamOn = (_isVehicleOn || !_isVehicleDetected) && !_isOffWhileVehicleDetected;
+  bool dashCamOn = _isVehicleOn || (!_isVehicleDetected && !_isOffWhileVehicleDetected);
   
   if (dashCamOn && _isDashCamTimedOut && _isVehicleOn)
   {
