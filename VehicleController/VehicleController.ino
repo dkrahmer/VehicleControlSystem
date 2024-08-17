@@ -305,7 +305,7 @@ void HandleRfInput()
   {
     if (!_isReturningHome && _isVehicleOn && _isSignalTimedOut)
     {
-      if (millis() - _lastVehicleOnMillis >= RETURNING_HOME_ALLOW_DELAY_MILLIS // the "last vehicle on" condition is to handle driveway parking
+      if (millis() - _lastVehicleOnMillis >= MISSING_SIGNAL_MILLIS // the "last vehicle on" condition is to handle driveway parking
         && millis() - _lastMessageReceivedMillis >= RETURNING_HOME_ALLOW_DELAY_MILLIS)
       {
         SetIsReturningHome(true);
