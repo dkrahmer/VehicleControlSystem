@@ -10,6 +10,7 @@ const unsigned long DETECT_VEHICLE_DISTANCE_MAX_CM = 80UL;
 const int DETECT_VEHICLE_CONSECUTIVE_READINGS = 5; // number of consecutive identical readings required to change state
 const int DETECT_GARAGE_DOOR_CONSECUTIVE_READINGS = 5; // number of consecutive identical readings required to change state
 const int RF_BPS = 4800;
+const int LOOP_DELAY_MS = 100;
 const char *VEHICLE_DETECTED_MESSAGE = "Detected";
 const char *VEHICLE_NOT_DETECTED_MESSAGE = "Undetected";
 const char *GARAGE_DOOR_OPEN_MESSAGE = "Open";
@@ -85,7 +86,7 @@ void loop()
     Serial.println(_buffer);
   }
 
-  delay(100);
+  delay(LOOP_DELAY_MS);
 }
 
 void ReadSensors()
