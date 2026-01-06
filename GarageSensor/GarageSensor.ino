@@ -7,8 +7,8 @@
 // Settings
 const unsigned long DETECT_VEHICLE_DISTANCE_MIN_CM = 0UL;
 const unsigned long DETECT_VEHICLE_DISTANCE_MAX_CM = 80UL;
-const unsigned long DETECT_VEHICLE_DELAY_MILLIS = 500UL; // prevents jitter detection while garage door is moving
-const unsigned long DETECT_GARAGE_DOOR_DEBOUNCE_MILLIS = 3000UL;
+const int DETECT_VEHICLE_CONSECUTIVE_READINGS = 5; // number of consecutive identical readings required to change state
+const int DETECT_GARAGE_DOOR_CONSECUTIVE_READINGS = 5; // number of consecutive identical readings required to change state
 const int RF_BPS = 4800;
 const char *VEHICLE_DETECTED_MESSAGE = "Detected";
 const char *VEHICLE_NOT_DETECTED_MESSAGE = "Undetected";
@@ -34,8 +34,10 @@ const unsigned long DISTANCE_ECHO_TIMEOUT = DETECT_VEHICLE_DISTANCE_MAX_CM * 5 *
 bool _isLowLevelVehicleDetected = false;
 bool _isVehicleDetected = false;
 bool _isGarageDoorOpen = false;
-unsigned long _lastLowLevelVehicleDetectionChangeMillis = 0UL;
-unsigned long _lastGarageDoorDetectionChangeMillis = 0UL;
+int _consecutiveVehicleReadings = 0;
+bool _lastRawIsVehicleDetected = false;
+int _consecutiveGarageDoorReadings = 0;
+bool _lastRawIsGarageDoorOpen = false;
 char _buffer[40];
 
 void setup()
@@ -89,21 +91,12 @@ void loop()
 
 void ReadSensors()
 {
-  bool isGarageDoorOpen = digitalRead(PIN_GARAGE_DOOR_SENSOR) == HIGH;
+  bool isGarageDoorOpen = IsGarageDoorOpen();
   bool isVehicleDetected = IsVehicleDetected();
 
   // Update the status LEDs immediately for in-person sensor debugging.
   digitalWrite(PIN_GARAGE_DOOR_OPEN_LED, isGarageDoorOpen ? LOW : HIGH);
   digitalWrite(PIN_VEHICLE_DETECTED_LED, isVehicleDetected ? LOW : HIGH);
-
-  if (isGarageDoorOpen != _isGarageDoorOpen && !(millis() - _lastGarageDoorDetectionChangeMillis < DETECT_GARAGE_DOOR_DEBOUNCE_MILLIS))
-  {
-    _isGarageDoorOpen = isGarageDoorOpen;
-    _lastGarageDoorDetectionChangeMillis = millis();
-  }
-
-  if (isVehicleDetected != _isVehicleDetected)
-    _isVehicleDetected = isVehicleDetected;
 }
 
 void TransmitMessage(char *message)
@@ -114,24 +107,61 @@ void TransmitMessage(char *message)
   vw_wait_tx();                                 // Wait until the whole message is sent
 }
 
+bool IsGarageDoorOpen()
+{
+  bool rawIsGarageDoorOpen = digitalRead(PIN_GARAGE_DOOR_SENSOR) == HIGH;
+
+  // Check if this reading matches the last reading
+  if (rawIsGarageDoorOpen == _lastRawIsGarageDoorOpen)
+  {
+    // Same as last time, increment counter
+    _consecutiveGarageDoorReadings++;
+  }
+  else
+  {
+    // Different from last time, reset counter
+    _consecutiveGarageDoorReadings = 1;
+    _lastRawIsGarageDoorOpen = rawIsGarageDoorOpen;
+  }
+
+  // Only change state if we've seen enough consecutive identical readings
+  if (_consecutiveGarageDoorReadings >= DETECT_GARAGE_DOOR_CONSECUTIVE_READINGS && rawIsGarageDoorOpen != _isGarageDoorOpen)
+  {
+    _isGarageDoorOpen = rawIsGarageDoorOpen;
+    Serial.print("Garage door state changed to: ");
+    Serial.println(_isGarageDoorOpen ? "OPEN" : "CLOSED");
+  }
+
+  return _isGarageDoorOpen;
+}
+
 bool IsVehicleDetected()
 {
   long distance_cm = GetDistance();
-  bool isVehicleDetected = distance_cm != -1 && distance_cm >= DETECT_VEHICLE_DISTANCE_MIN_CM && distance_cm <= DETECT_VEHICLE_DISTANCE_MAX_CM;
+  bool rawIsVehicleDetected = distance_cm != -1 && distance_cm >= DETECT_VEHICLE_DISTANCE_MIN_CM && distance_cm <= DETECT_VEHICLE_DISTANCE_MAX_CM;
 
-  if (isVehicleDetected != _isLowLevelVehicleDetected)
+  // Check if this reading matches the last reading
+  if (rawIsVehicleDetected == _lastRawIsVehicleDetected)
   {
-    _isLowLevelVehicleDetected = isVehicleDetected;
-    _lastLowLevelVehicleDetectionChangeMillis = millis();
+    // Same as last time, increment counter
+    _consecutiveVehicleReadings++;
+  }
+  else
+  {
+    // Different from last time, reset counter
+    _consecutiveVehicleReadings = 1;
+    _lastRawIsVehicleDetected = rawIsVehicleDetected;
   }
 
-  if ((millis() - _lastLowLevelVehicleDetectionChangeMillis) < DETECT_VEHICLE_DELAY_MILLIS)
+  // Only change state if we've seen enough consecutive identical readings
+  if (_consecutiveVehicleReadings >= DETECT_VEHICLE_CONSECUTIVE_READINGS && rawIsVehicleDetected != _isVehicleDetected)
   {
-    isVehicleDetected = _isVehicleDetected; // revert because delay is not satisfied
-    Serial.print("Revert!");
+    _isVehicleDetected = rawIsVehicleDetected;
+    Serial.print("Vehicle detection changed to: ");
+    Serial.println(_isVehicleDetected ? "DETECTED" : "NOT DETECTED");
   }
 
-  return isVehicleDetected;
+  return _isVehicleDetected;
 }
 
 long GetDistance()
