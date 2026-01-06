@@ -31,7 +31,6 @@ const int PIN_GARAGE_DOOR_OPEN_LED = PIN_STATUS_LED;
 const unsigned long DISTANCE_ECHO_TIMEOUT = DETECT_VEHICLE_DISTANCE_MAX_CM * 5 * 29 * 2;
 
 // Global
-bool _isLowLevelVehicleDetected = false;
 bool _isVehicleDetected = false;
 bool _isGarageDoorOpen = false;
 int _consecutiveVehicleReadings = 0;
@@ -71,7 +70,7 @@ void loop()
   // Serial.print(distanceCm);
   // Serial.println(" cm");
 
-  sprintf(_buffer, "%s%c%s",
+  snprintf(_buffer, sizeof(_buffer), "%s%c%s",
           _isVehicleDetected ? VEHICLE_DETECTED_MESSAGE : VEHICLE_NOT_DETECTED_MESSAGE,
           MESSAGE_SEPARATOR_CHAR,
           _isGarageDoorOpen ? GARAGE_DOOR_OPEN_MESSAGE : GARAGE_DOOR_CLOSED_MESSAGE);

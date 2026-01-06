@@ -80,7 +80,6 @@ unsigned long _lastVehicleOffMillis = 0UL;
 unsigned long _lastDashCamOnMillis = 0UL;
 unsigned long _lastDashCamOnBatteryMillis = 0UL;
 unsigned long _lastMessageReceivedMillis = 0UL;
-unsigned long _lastVehicleDetectedMillis = 0UL;
 unsigned long _lastMirrorAFoldPositionSetMillis = 0UL;
 unsigned long _lastMirrorBFoldPositionSetMillis = 0UL;
 unsigned long _lastVehicleOnChangeMillis = 0UL;
@@ -263,7 +262,6 @@ void HandleRfInput()
     Serial.println("]");
     if (buflen > 3)
     {
-      unsigned long lastVehicleDetectedMillis = _lastVehicleDetectedMillis;
       bool isVehicleDetected = _isVehicleDetected;
       if (strstr(_buffer, VEHICLE_NOT_DETECTED_MESSAGE))
       {
@@ -274,7 +272,6 @@ void HandleRfInput()
       {
         messagesReceived++;
         isVehicleDetected = true;
-        lastVehicleDetectedMillis = millis();
         SetIsReturningHome(false);
       }
 
@@ -296,7 +293,6 @@ void HandleRfInput()
         if (_isVehicleDetected != isVehicleDetected)
         {
           _isVehicleDetected = isVehicleDetected;
-          _lastVehicleDetectedMillis = lastVehicleDetectedMillis;
 
           Serial.print("Vehicle is ");
           Serial.print(_isVehicleDetected ? "" : "not ");
@@ -416,6 +412,10 @@ void SetMirrorFoldPosition(char mirrorId, bool mirrorOut)
     __lastMirrorFoldPositionSetMillis = &_lastMirrorBFoldPositionSetMillis;
     __mirrorFoldPosition = &_mirrorBFoldPosition;
     __isMirrorFoldResting = &_isMirrorBFoldResting;
+  }
+  else
+  {
+    return; // invalid mirrorId
   }
 
   if (*__isMirrorFoldResting)
